@@ -25,6 +25,11 @@ SAMPLE_RATE = 44100
 CHUNK_SIZE = 4096
 AUDIO_FORMAT = "float32"  # Use string for portability
 
+# Capture settings
+# If enabled, selecting a WASAPI output device in the UI will use loopback capture,
+# allowing silent recording without requiring audible speaker playback.
+ENABLE_WASAPI_LOOPBACK = True
+
 # Compression settings
 ENABLE_COMPRESSION = True  # Enable automatic MP3 compression after recording
 MP3_BITRATE = "192k"  # MP3 bitrate: "128k", "192k", "256k", "320k" (192k recommended for radio)

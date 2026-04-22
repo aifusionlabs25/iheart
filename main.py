@@ -98,7 +98,7 @@ from config import (
     SAVE_DIR, LOG_FILE_PATH, CHANNELS, SAMPLE_RATE, CHUNK_SIZE, AUDIO_FORMAT,
     ENABLE_COMPRESSION, MP3_BITRATE, DELETE_ORIGINAL_WAV, FFMPEG_PATH,
     SCHEDULE_TIME, ENABLE_GOOGLE_DRIVE_UPLOAD,
-    LOCAL_RETENTION_DAYS, CLOSE_APP_ON_COMPLETE
+    LOCAL_RETENTION_DAYS, CLOSE_APP_ON_COMPLETE, ENABLE_WASAPI_LOOPBACK
 )
 # GoogleDriveUploader disabled
 # from google_drive_uploader import GoogleDriveUploader
@@ -239,33 +239,54 @@ class AudioRecorder:
 
     @staticmethod
     def get_audio_devices():
-        """Returns a list of available input audio devices."""
+        """Returns a list of recordable devices (inputs + optional WASAPI loopback outputs)."""
         devices_list = []
         try:
             devices = sd.query_devices()
+            hostapis = sd.query_hostapis()
             if not devices:
                 logging.warning("No audio devices found by sounddevice.")
                 return []
             for i, device in enumerate(devices):
-                # Include only devices with input channels
-                if device.get('max_input_channels', 0) > 0:
-                    device_name = device.get('name', f'Unknown Device {i}')
-                    
-                    # Filter out generic/virtual devices that are usually not useful for recording
-                    lower_name = device_name.lower()
-                    excluded_keywords = [
-                        "microsoft sound mapper",
-                        "primary sound capture driver",
-                        "primary sound driver",
-                        "headphones", 
-                        "speakers",
-                        "default"
-                    ]
-                    
-                    if any(keyword in lower_name for keyword in excluded_keywords):
-                        continue
-                        
-                    devices_list.append({'index': i, 'name': device_name})
+                device_name = device.get('name', f'Unknown Device {i}')
+                lower_name = device_name.lower()
+                max_input_channels = int(device.get('max_input_channels', 0))
+                max_output_channels = int(device.get('max_output_channels', 0))
+                hostapi_index = int(device.get('hostapi', -1))
+                hostapi_name = ""
+                if 0 <= hostapi_index < len(hostapis):
+                    hostapi_name = hostapis[hostapi_index].get('name', '')
+                hostapi_lower = hostapi_name.lower()
+
+                # Keep light filtering for known placeholder devices only.
+                excluded_keywords = [
+                    "microsoft sound mapper",
+                    "primary sound capture driver",
+                    "primary sound driver",
+                ]
+                if any(keyword in lower_name for keyword in excluded_keywords):
+                    continue
+
+                is_standard_input = max_input_channels > 0
+                is_wasapi_output = (
+                    ENABLE_WASAPI_LOOPBACK
+                    and max_input_channels == 0
+                    and max_output_channels > 0
+                    and "wasapi" in hostapi_lower
+                )
+
+                if not (is_standard_input or is_wasapi_output):
+                    continue
+
+                display_name = device_name
+                if is_wasapi_output:
+                    display_name = f"{device_name} [Loopback]"
+
+                devices_list.append({
+                    'index': i,
+                    'name': display_name,
+                    'loopback': is_wasapi_output
+                })
             logging.info(f"Found {len(devices_list)} input devices.")
         except Exception as e:
             logging.error(f"Error querying audio devices: {e}", exc_info=True)
@@ -308,9 +329,26 @@ class AudioRecorder:
     def start_recording(self, device_index, duration=None, progress_callback=None):
         try:
             self.device_index = device_index
+            use_loopback = False
+            max_input_channels = CHANNELS
+            max_output_channels = CHANNELS
             try:
                 device_info = sd.query_devices(device=self.device_index)
                 self.selected_device_name = device_info.get('name', f'Device {self.device_index}')
+                max_input_channels = int(device_info.get('max_input_channels', 0))
+                max_output_channels = int(device_info.get('max_output_channels', 0))
+                hostapi_idx = int(device_info.get('hostapi', -1))
+                hostapi_name = ""
+                if hostapi_idx >= 0:
+                    hostapi_name = sd.query_hostapis(hostapi_idx).get('name', '')
+                use_loopback = (
+                    ENABLE_WASAPI_LOOPBACK
+                    and max_input_channels == 0
+                    and max_output_channels > 0
+                    and "wasapi" in hostapi_name.lower()
+                    and hasattr(sd, "WasapiSettings")
+                )
+
                 # Use device's native sample rate to avoid resampling artifacts
                 native_samplerate = int(device_info.get('default_samplerate', 44100))
                 self.recording_samplerate = native_samplerate
@@ -318,6 +356,8 @@ class AudioRecorder:
             except Exception as e:
                 self.selected_device_name = f'Device {self.device_index} (Name query failed: {e})'
                 self.recording_samplerate = 44100  # Fallback
+                max_input_channels = CHANNELS
+                max_output_channels = CHANNELS
                 logging.warning(f"Could not query device {self.device_index}: {e}. Using fallback 44100 Hz.")
 
             self.duration = duration
@@ -332,12 +372,25 @@ class AudioRecorder:
             self.recording_event.set()  # Ensure event is set
 
             # Start the stream and keep thread alive
+            selected_channels = CHANNELS
+            extra_settings = None
+            if use_loopback:
+                selected_channels = max(1, min(CHANNELS, max_output_channels))
+                extra_settings = sd.WasapiSettings(loopback=True)
+                logging.info(
+                    f"Using WASAPI loopback capture on device {self.selected_device_name} "
+                    f"(channels={selected_channels})."
+                )
+            else:
+                selected_channels = max(1, min(CHANNELS, max_input_channels))
+
             with sd.InputStream(
                 device=self.device_index,
-                channels=2,
+                channels=selected_channels,
                 samplerate=self.recording_samplerate,
                 callback=self.audio_callback,
-                blocksize=1024
+                blocksize=1024,
+                extra_settings=extra_settings
             ):
                 logging.info(f"Started recording on {self.selected_device_name} (Index: {self.device_index}) at {self.recording_samplerate} Hz")
                 while self.recording_event.is_set():
