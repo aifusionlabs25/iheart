@@ -10,6 +10,7 @@ A desktop application for recording iHeart Radio streams with scheduling, noise 
 - **Browser Automation** — Auto-launches iHeartRadio stream, keeps playback alive, handles popups
 - **MP3 Compression** — Automatic WAV → MP3 conversion via FFmpeg
 - **Audio Processing** — Optional noise reduction pipeline
+- **Silent Capture Mode** — Supports WASAPI loopback capture for recording without audible speaker output (Windows)
 - **Boutique GUI** — Custom PyQt6 interface with VU meters, waveform display, and hardware-style controls
 - **CLI Mode** — Full headless operation for servers or Task Scheduler
 
@@ -106,8 +107,19 @@ All settings are centralized in `config.py`. Key options:
 | `LOCAL_RETENTION_DAYS` | `5` | Auto-delete recordings older than N days |
 | `ENABLE_GOOGLE_DRIVE_UPLOAD` | `False` | Upload recordings to Google Drive |
 | `CLOSE_APP_ON_COMPLETE` | `False` | Exit app after scheduled recording completes |
+| `ENABLE_WASAPI_LOOPBACK` | `True` | Allow selecting WASAPI output devices for silent loopback capture |
 
 Audio processing settings can also be configured via `audio_processing_config.json`.
+
+### Silent Recording on Windows (No Audible Playback)
+
+If you want to record while sleeping (no audible speaker output), use a WASAPI-capable output device with loopback:
+
+1. In device selection, choose an entry labeled with **`[Loopback]`**.
+2. Keep your physical speakers muted or volume low/off as needed.
+3. The recorder captures the render stream directly via WASAPI loopback.
+
+> Note: Loopback availability depends on your audio driver and host API support in PortAudio/sounddevice.
 
 See `docs/config_reference.md` for full details.
 
