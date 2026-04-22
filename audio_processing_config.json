@@ -1,0 +1,10 @@
+{
+    "enabled": false,
+    "output_directory": null,
+    "enable_noise_reduction": false,
+    "noise_reduction_strength": 0.7,
+    "preserve_original": true,
+    "output_suffix": "_enhanced",
+    "processing_threads": 2,
+    "max_memory_usage_mb": 1024
+}

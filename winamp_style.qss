@@ -1,0 +1,44 @@
+QMainWindow {
+    background-color: #000000;
+    color: #00FF00;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+QPushButton {
+    background-color: #333333;
+    color: #00FF00;
+    border: 1px solid #00FF00;
+    padding: 5px;
+}
+
+QPushButton:hover {
+    background-color: #444444;
+}
+
+QLabel {
+    color: #00FF00;
+}
+
+QStatusBar {
+    background-color: #111111;
+    color: #00FF00;
+}
+
+QDateTimeEdit {
+    background-color: #222222;
+    color: #00FF00;
+    border: 1px solid #00FF00;
+}
+
+QSlider::groove:horizontal {
+    border: 1px solid #00FF00;
+    height: 8px;
+    background: #333333;
+}
+
+QSlider::handle:horizontal {
+    background: #00FF00;
+    border: 1px solid #00FF00;
+    width: 18px;
+    margin: -2px 0;
+} 
