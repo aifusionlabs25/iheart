@@ -15,53 +15,143 @@ import wave
 import subprocess
 from browser_automation import BrowserController # Added import
 
+try:
+    import pythoncom
+except Exception:
+    pythoncom = None
+
+try:
+    import soundcard as sc
+except Exception:
+    sc = None
+
 # --- Mission / One-Off Logic ---
-def execute_mission(url, duration, device_index):
+def execute_mission(url, duration, device_index, browser_name="chrome"):
     """
     Executes a 'Mission': Launches browser to URL, records audio, and cleans up.
     Running in a separate thread (APScheduler job).
     """
-    logging.info(f"MISSION START: Target={url}, Duration={duration}s")
+    logging.info(f"MISSION START: Target={url}, Duration={duration}s, Browser={browser_name}")
     
     # 1. Launch Browser
-    browser = BrowserController(url)
-    browser.start() # Starts QThread
-    
-    # Wait for browser to load (simple sleep for now, could be improved)
-    time_module.sleep(15)
-    
-    # 2. Start Recording
-    # We use start_manual_recording because it's effectively a manual session triggered by automation
-    # vs the internal daily schedule logic.
-    if start_manual_recording(device_index=device_index, duration=duration):
-        logging.info("Mission Recording Started.")
-    else:
-        logging.error("Mission Recording Failed to Start!")
-        browser.stop()
-        return
+    browser = BrowserController(url, browser_name=browser_name)
+    recording_started = False
 
-    # 3. Wait for Duration
-    # We need to wait here because this function is the job. 
-    # If we exit, the browser thread might get killed if not carefully managed, 
-    # but more importantly we need to stop the recording at the end.
-    # start_manual_recording runs its OWN thread, so we just sleep here.
-    
-    # Wait loop
-    elapsed = 0
-    while elapsed < duration:
-        time_module.sleep(1)
-        elapsed += 1
+    try:
+        browser.start() # Starts QThread
         
-    # 4. Stop Logic
-    logging.info("Mission Duration Reached. RTB (Returning to Base).")
-    stop_manual_recording()
-    browser.stop()
-    
-    # 5. Cleanup / Upload handled by stop_manual_recording internal logic
-    
-    if CLOSE_APP_ON_COMPLETE:
-        logging.info("Mission Complete. Shutting down system.")
-        os._exit(0)
+        # Wait for browser startup before recording. If WebDriver fails, do not
+        # create a silent/empty recording.
+        browser_ready = False
+        for _ in range(45):
+            if getattr(browser, "startup_error", None):
+                logging.error("Mission Browser Failed to Start: %s", browser.startup_error)
+                return False
+            if browser.driver:
+                browser_ready = True
+                break
+            if not browser.isRunning():
+                logging.error("Mission Browser Thread exited before WebDriver was ready.")
+                return False
+            time_module.sleep(1)
+
+        if not browser_ready:
+            logging.error("Mission Browser did not become ready within 45 seconds.")
+            return False
+
+        # Wait until the browser thread has actually clicked/confirmed playback.
+        # Without this, a scheduled run can produce a clean but silent file.
+        playback_ready = False
+        for _ in range(90):
+            if getattr(browser, "startup_error", None):
+                logging.error("Mission Browser failed during playback startup: %s", browser.startup_error)
+                return False
+            if not browser.isRunning():
+                logging.error("Mission Browser Thread exited before playback was confirmed.")
+                return False
+            if getattr(browser, "playback_confirmed", False):
+                playback_ready = True
+                logging.info(
+                    "Mission Browser playback confirmed: %s",
+                    getattr(browser, "last_playback_status", "confirmed"),
+                )
+                break
+            time_module.sleep(1)
+
+        if not playback_ready:
+            logging.error(
+                "Mission Browser did not confirm playback within 90 seconds. Last status: %s",
+                getattr(browser, "last_playback_status", "unknown"),
+            )
+            return False
+
+        # 2. Start Recording
+        # We use start_manual_recording because it's effectively a manual session triggered by automation
+        # vs the internal daily schedule logic.
+        if start_manual_recording(device_index=device_index, duration=duration):
+            recording_started = True
+            logging.info("Mission Recording Started.")
+            for _ in range(5):
+                if manual_recorder_instance and getattr(manual_recorder_instance, "recording_error", None):
+                    break
+                if (
+                    manual_recording_thread
+                    and manual_recording_thread.is_alive()
+                    and manual_recorder_instance
+                    and manual_recorder_instance.is_recording
+                    and getattr(manual_recorder_instance, "stream_ready", False)
+                ):
+                    break
+                time_module.sleep(1)
+            if (
+                (manual_recorder_instance and getattr(manual_recorder_instance, "recording_error", None))
+                or
+                not manual_recording_thread
+                or not manual_recording_thread.is_alive()
+                or not manual_recorder_instance
+                or not manual_recorder_instance.is_recording
+                or not getattr(manual_recorder_instance, "stream_ready", False)
+            ):
+                logging.error(
+                    "Mission Recording failed health check after startup. Error: %s",
+                    getattr(manual_recorder_instance, "recording_error", None),
+                )
+                recording_started = False
+                return False
+        else:
+            logging.error("Mission Recording Failed to Start!")
+            return False
+
+        # 3. Wait for Duration
+        # We need to wait here because this function is the job.
+        # If we exit, the browser thread might get killed if not carefully managed,
+        # but more importantly we need to stop the recording at the end.
+        # start_manual_recording runs its OWN thread, so we just sleep here.
+
+        # Wait loop
+        elapsed = 0
+        while elapsed < duration:
+            time_module.sleep(1)
+            elapsed += 1
+
+        # 4. Stop Logic
+        logging.info("Mission Duration Reached. RTB (Returning to Base).")
+        stop_manual_recording()
+        recording_started = False
+
+        # 5. Cleanup / Upload handled by stop_manual_recording internal logic
+
+        if CLOSE_APP_ON_COMPLETE:
+            logging.info("Mission Complete. Shutting down system.")
+            os._exit(0)
+
+        return True
+    finally:
+        if recording_started:
+            logging.info("Mission cleanup: stopping active recording.")
+            stop_manual_recording()
+        if browser:
+            browser.stop()
 
 def schedule_one_off_mission(run_date, url, duration, device_index):
     """
@@ -229,6 +319,8 @@ class AudioRecorder:
         self.recording_samplerate = 44100  # Default, updated at recording time
         self.duration = None
         self.frames = [] # Retained from original, as it's used later
+        self.stream_ready = False
+        self.recording_error = None
         self.start_time = None # Retained
         self.pause_time = None # Retained
         self.total_pause_duration = 0 # Retained
@@ -327,8 +419,18 @@ class AudioRecorder:
 
 
     def start_recording(self, device_index, duration=None, progress_callback=None):
+        com_initialized = False
         try:
+            if pythoncom is not None:
+                try:
+                    pythoncom.CoInitialize()
+                    com_initialized = True
+                except Exception as com_err:
+                    logging.warning("Could not initialize COM for audio recording thread: %s", com_err)
+
             self.device_index = device_index
+            self.stream_ready = False
+            self.recording_error = None
             use_loopback = False
             max_input_channels = CHANNELS
             max_output_channels = CHANNELS
@@ -366,7 +468,7 @@ class AudioRecorder:
             self.start_time = time_module.time()
             self.last_progress_log_time = self.start_time
             self.total_pause_duration = 0
-            self.is_recording = True
+            self.is_recording = False
             self.is_paused = False
 
             self.recording_event.set()  # Ensure event is set
@@ -376,25 +478,29 @@ class AudioRecorder:
             extra_settings = None
             if use_loopback:
                 selected_channels = max(1, min(CHANNELS, max_output_channels))
-                extra_settings = sd.WasapiSettings(loopback=True)
                 logging.info(
                     f"Using WASAPI loopback capture on device {self.selected_device_name} "
                     f"(channels={selected_channels})."
                 )
+                if sc is None:
+                    raise RuntimeError("soundcard package is required for WASAPI loopback capture.")
+                self._record_loopback_with_soundcard(selected_channels)
             else:
                 selected_channels = max(1, min(CHANNELS, max_input_channels))
 
-            with sd.InputStream(
-                device=self.device_index,
-                channels=selected_channels,
-                samplerate=self.recording_samplerate,
-                callback=self.audio_callback,
-                blocksize=1024,
-                extra_settings=extra_settings
-            ):
-                logging.info(f"Started recording on {self.selected_device_name} (Index: {self.device_index}) at {self.recording_samplerate} Hz")
-                while self.recording_event.is_set():
-                    time_module.sleep(0.1)  # Keep thread alive
+                with sd.InputStream(
+                    device=self.device_index,
+                    channels=selected_channels,
+                    samplerate=self.recording_samplerate,
+                    callback=self.audio_callback,
+                    blocksize=1024,
+                    extra_settings=extra_settings
+                ):
+                    self.is_recording = True
+                    self.stream_ready = True
+                    logging.info(f"Started recording on {self.selected_device_name} (Index: {self.device_index}) at {self.recording_samplerate} Hz")
+                    while self.recording_event.is_set():
+                        time_module.sleep(0.1)  # Keep thread alive
 
             # After exiting the loop, save the recording
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -410,8 +516,67 @@ class AudioRecorder:
 
         except Exception as e:
             logging.error(f"Error starting recording: {str(e)}")
+            self.recording_error = e
             self.is_recording = False
+            self.stream_ready = False
             return False
+        finally:
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+
+    def _record_loopback_with_soundcard(self, channels):
+        """Record a WASAPI speaker loopback stream using the soundcard package."""
+        target_name = self.selected_device_name.lower()
+        candidates = sc.all_microphones(include_loopback=True)
+        loopback_mic = None
+        for mic in candidates:
+            mic_name = getattr(mic, "name", "").lower()
+            is_loopback = bool(getattr(mic, "isloopback", False))
+            if not is_loopback:
+                continue
+            if target_name in mic_name or mic_name in target_name:
+                loopback_mic = mic
+                break
+            if "sceptre" in target_name and "sceptre" in mic_name:
+                loopback_mic = mic
+                break
+            if "nvidia" in target_name and "nvidia" in mic_name:
+                loopback_mic = mic
+                break
+
+        if loopback_mic is None:
+            available = ", ".join(getattr(m, "name", "unknown") for m in candidates)
+            raise RuntimeError(f"No matching loopback microphone found for {self.selected_device_name}. Available: {available}")
+
+        logging.info(
+            "Started soundcard loopback recording from %s at %s Hz.",
+            loopback_mic.name,
+            self.recording_samplerate,
+        )
+        with loopback_mic.recorder(samplerate=self.recording_samplerate, channels=channels) as recorder:
+            self.is_recording = True
+            self.stream_ready = True
+            while self.recording_event.is_set():
+                data = recorder.record(numframes=1024)
+                self._append_audio_frame(data)
+
+    def _append_audio_frame(self, indata):
+        frame = np.asarray(indata, dtype=np.float32)
+        if frame.ndim == 1:
+            frame = frame.reshape(-1, 1)
+        self.frames.append(frame.copy())
+        try:
+            rms = np.sqrt(np.mean(frame**2))
+            if rms > 0.0001:
+                dbfs = 20 * np.log10(rms)
+                self.current_vu = dbfs + 25
+            else:
+                self.current_vu = -40
+        except Exception:
+            self.current_vu = -40
 
     def _save_recording(self, filename):
         """Save the recorded frames to a WAV file. Splits into 1-hour chunks if needed."""
@@ -627,19 +792,7 @@ class AudioRecorder:
             logging.warning(f"Audio callback status: {status}")
         if hasattr(self, 'is_recording') and hasattr(self, 'is_paused'):
             if self.is_recording and not self.is_paused:
-                self.frames.append(indata.copy())
-                try:
-                    rms = np.sqrt(np.mean(indata**2))
-                    if rms > 0.0001:
-                        # Convert to dBFS. 
-                        dbfs = 20 * np.log10(rms)
-                        # Offset to push typical Windows audio (-30 to -15 dBFS) into the -20 to +3 VU range
-                        # Adding +25 means a -25 dBFS signal registers as 0 on the VU meter.
-                        self.current_vu = dbfs + 25 
-                    else:
-                        self.current_vu = -40
-                except Exception:
-                    self.current_vu = -40
+                self._append_audio_frame(indata)
 
 
 # --- Recording Control Functions (called by GUI or CLI) ---

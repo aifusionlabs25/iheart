@@ -62,3 +62,6 @@ test_output*.txt
 diagnostic_buttons.log
 batch_run*.log
 mission.log
+
+# ----- Browser Profiles -----
+.edge-profile-iheart/

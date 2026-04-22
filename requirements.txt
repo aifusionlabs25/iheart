@@ -5,6 +5,7 @@ scipy==1.11.4
 apscheduler==3.10.4
 pytz==2023.3.post1
 sounddevice==0.4.6
+soundcard==0.4.6
 selenium==4.16.0
 webdriver-manager==4.0.1
 python-dotenv==1.0.0

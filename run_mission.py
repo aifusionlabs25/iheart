@@ -47,12 +47,14 @@ def run_direct_mission():
     parser.add_argument("--duration", type=int, default=14400, help="Duration in seconds (default: 4 hours)")
     parser.add_argument("--device", type=int, default=None, help="Audio Device Index (default: auto-detect)")
     parser.add_argument("--url", type=str, default="https://www.iheart.com/live/newsradio-830-khvh-4748/", help="Target URL")
+    parser.add_argument("--browser", choices=["chrome", "edge"], default="chrome", help="Browser for stream automation")
     
     args = parser.parse_args()
     
     print("="*60)
     print(f"STARTING DIRECT MISSION at {datetime.now()}")
     print(f"Target: {args.url}")
+    print(f"Browser: {args.browser}")
     print(f"Device Index: {args.device}")
     print(f"Duration: {args.duration} seconds ({args.duration/3600:.2f} hours)")
     print("="*60)
@@ -67,7 +69,10 @@ def run_direct_mission():
         print("QApplication Initialized.")
         
         # Execute mission (this blocks until done)
-        main.execute_mission(args.url, args.duration, args.device)
+        mission_ok = main.execute_mission(args.url, args.duration, args.device, browser_name=args.browser)
+        if not mission_ok:
+            print("MISSION FAILED")
+            sys.exit(1)
         
         print("="*60)
         print("MISSION COMPLETE")
