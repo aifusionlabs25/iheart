@@ -62,6 +62,22 @@ Expected verification:
 - stereo or mono WAV with a valid sample rate
 - RMS above `100`
 
+## Production Schedule
+
+The Windows Scheduled Task is:
+
+```text
+\AI Fusion Labs\Coast Night Watch
+```
+
+Production timing:
+
+- start: `11:05 PM` Arizona time
+- duration: `14400` seconds / 4 hours
+- expected coverage: about `11:05 PM` to `3:05 AM`
+
+That start time avoids most of the pre-show news feed and still gives the browser a few minutes to load, clear popups, and start playback before the show usually begins around `11:10 PM`.
+
 ## Hermes / WSL Command
 
 Hermes runs inside WSL, so use the included Bash wrapper:
