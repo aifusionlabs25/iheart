@@ -14,6 +14,54 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
+$LogDir = Join-Path $Root "logs"
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+$TranscriptPath = Join-Path $LogDir ("coast_night_watch_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+$script:TranscriptStarted = $false
+
+function Stop-CoastTranscript {
+    if ($script:TranscriptStarted) {
+        try {
+            Stop-Transcript | Out-Null
+        } catch {
+        }
+        $script:TranscriptStarted = $false
+    }
+}
+
+function Exit-Coast {
+    param([int]$Code)
+    Stop-CoastTranscript
+    exit $Code
+}
+
+trap {
+    Write-Host "Coast night watch failed: $($_.Exception.Message)" -ForegroundColor Red
+    Stop-CoastTranscript
+    exit 1
+}
+
+Start-Transcript -Path $TranscriptPath -Append | Out-Null
+$script:TranscriptStarted = $true
+Write-Host "Transcript: $TranscriptPath"
+
+$PythonCandidates = @(
+    $env:IHEART_PYTHON,
+    "C:\Users\AI Fusion Labs\AppData\Local\Programs\Python\Python311\python.exe",
+    "C:\Users\AI Fusion Labs\AppData\Local\Microsoft\WindowsApps\python.exe"
+) | Where-Object { $_ -and (Test-Path $_) }
+
+$PythonExe = $PythonCandidates | Select-Object -First 1
+if (-not $PythonExe) {
+    $PythonCommand = Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($PythonCommand) {
+        $PythonExe = $PythonCommand.Source
+    }
+}
+if (-not $PythonExe) {
+    throw "Python was not found. Set IHEART_PYTHON or install Python 3.11."
+}
+Write-Host "Python: $PythonExe"
 
 if ($Browser -eq "edge") {
     $EdgePaths = @(
@@ -48,7 +96,7 @@ payload = {
 print(json.dumps(payload))
 '@
 
-$DeviceJson = $DeviceProbe | python -
+$DeviceJson = $DeviceProbe | & $PythonExe -
 
 $DeviceInfo = $DeviceJson | ConvertFrom-Json
 $DefaultOutput = [int]$DeviceInfo.default_output
@@ -80,23 +128,25 @@ if (-not $ConfirmBrowserRoutedToMonitor) {
 if ($PreflightOnly) {
     Write-Host ""
     Write-Host "Preflight passed. No browser or recording mission started."
-    exit 0
+    Exit-Coast 0
 }
 
 Write-Host ""
 Write-Host "Starting mission for $DurationSeconds seconds..."
-python run_mission.py --browser $Browser --duration $DurationSeconds --device $DeviceIndex --url $Url
+& $PythonExe run_mission.py --browser $Browser --duration $DurationSeconds --device $DeviceIndex --url $Url
 
 if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+    Exit-Coast $LASTEXITCODE
 }
 
 if (-not $SkipVerify) {
     $MinDuration = [Math]::Max(1, [Math]::Floor($DurationSeconds * 0.90))
     Write-Host ""
     Write-Host "Verifying newest recording (minimum duration: $MinDuration seconds, minimum RMS: $MinRms)..."
-    python verify_latest_recording.py --root $Root --min-duration $MinDuration --min-rms $MinRms
+    & $PythonExe verify_latest_recording.py --root $Root --min-duration $MinDuration --min-rms $MinRms
     if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
+        Exit-Coast $LASTEXITCODE
     }
 }
+
+Exit-Coast 0
