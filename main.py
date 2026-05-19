@@ -139,6 +139,26 @@ def execute_mission(url, duration, device_index, browser_name="chrome"):
         while elapsed < duration:
             time_module.sleep(1)
             elapsed += 1
+            if manual_recorder_instance and getattr(manual_recorder_instance, "recording_error", None):
+                logging.error(
+                    "Mission Recording failed during run after %s seconds. Error: %s",
+                    elapsed,
+                    manual_recorder_instance.recording_error,
+                )
+                recording_started = False
+                return False
+            if (
+                not manual_recording_thread
+                or not manual_recording_thread.is_alive()
+                or not manual_recorder_instance
+                or not manual_recorder_instance.is_recording
+            ):
+                logging.error(
+                    "Mission Recording stopped unexpectedly after %s seconds.",
+                    elapsed,
+                )
+                recording_started = False
+                return False
 
         # 4. Stop Logic
         logging.info("Mission Duration Reached. RTB (Returning to Base).")
@@ -508,21 +528,22 @@ class AudioRecorder:
                     while self.recording_event.is_set():
                         time_module.sleep(0.1)  # Keep thread alive
 
-            # After exiting the loop, save the recording
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            device_info_name = "Dev" + "".join(c if c.isalnum() else '_' for c in self.selected_device_name)
-            if self.duration:
-                filename = os.path.join(SAVE_DIR, f"Rec_{timestamp}_{device_info_name}_{int(self.duration)}s.wav")
-            else:
-                filename = os.path.join(SAVE_DIR, f"Rec_{timestamp}_{device_info_name}.wav")
-            self._save_recording(filename)
+            self._save_current_recording()
             self.is_recording = False
-            logging.info(f"Recording stopped and file saved: {filename}")
             return True
 
         except Exception as e:
             logging.error(f"Error starting recording: {str(e)}")
             self.recording_error = e
+            if self.frames:
+                logging.warning(
+                    "Recording failed after capturing %s frame buffers. Saving partial recording.",
+                    len(self.frames),
+                )
+                try:
+                    self._save_current_recording(prefix="RecPartial")
+                except Exception as save_err:
+                    logging.error("Failed to save partial recording after recorder error: %s", save_err, exc_info=True)
             self.is_recording = False
             self.stream_ready = False
             return False
@@ -583,6 +604,17 @@ class AudioRecorder:
                 self.current_vu = -40
         except Exception:
             self.current_vu = -40
+
+    def _save_current_recording(self, prefix="Rec"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        device_info_name = "Dev" + "".join(c if c.isalnum() else '_' for c in self.selected_device_name)
+        if self.duration:
+            filename = os.path.join(SAVE_DIR, f"{prefix}_{timestamp}_{device_info_name}_{int(self.duration)}s.wav")
+        else:
+            filename = os.path.join(SAVE_DIR, f"{prefix}_{timestamp}_{device_info_name}.wav")
+        self._save_recording(filename)
+        logging.info("Recording stopped and file saved: %s", filename)
+        return filename
 
     def _save_recording(self, filename):
         """Save the recorded frames to a WAV file. Splits into 1-hour chunks if needed."""

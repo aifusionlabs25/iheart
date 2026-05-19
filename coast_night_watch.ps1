@@ -188,10 +188,32 @@ if ($PreflightOnly) {
 
 Write-Host ""
 Write-Host "Starting mission for $DurationSeconds seconds..."
+$MissionStart = Get-Date
 & $PythonExe run_mission.py --browser $Browser --duration $DurationSeconds --device $DeviceIndex --url $Url
+$MissionExitCode = $LASTEXITCODE
 
-if ($LASTEXITCODE -ne 0) {
-    Exit-Coast $LASTEXITCODE
+if ($MissionExitCode -ne 0) {
+    $ElapsedSeconds = [int]((Get-Date) - $MissionStart).TotalSeconds
+    $RemainingSeconds = [Math]::Max(0, $DurationSeconds - $ElapsedSeconds)
+    Write-Host "Mission failed with exit code $MissionExitCode after $ElapsedSeconds seconds." -ForegroundColor Red
+
+    $FallbackDevice = $DeviceInfo.devices | Where-Object { $_.index -eq $FallbackDeviceIndex } | Select-Object -First 1
+    $CanRetryFallback = (
+        $RemainingSeconds -ge 300 -and
+        $FallbackDevice -and
+        (Test-LoopbackOutputDevice $FallbackDevice) -and
+        $FallbackDeviceIndex -ne $DeviceIndex
+    )
+
+    if ($CanRetryFallback) {
+        Write-Host "Retrying remaining $RemainingSeconds seconds on fallback capture device [$FallbackDeviceIndex] $($FallbackDevice.name)." -ForegroundColor Yellow
+        & $PythonExe run_mission.py --browser $Browser --duration $RemainingSeconds --device $FallbackDeviceIndex --url $Url
+        $MissionExitCode = $LASTEXITCODE
+    }
+
+    if ($MissionExitCode -ne 0) {
+        Exit-Coast $MissionExitCode
+    }
 }
 
 if (-not $SkipVerify) {
