@@ -1,6 +1,7 @@
 param(
     [int]$DurationSeconds = 300,
-    [int]$DeviceIndex = 16,
+    [int]$DeviceIndex = -1,
+    [int]$FallbackDeviceIndex = 12,
     [string]$Url = "https://www.iheart.com/live/newsradio-830-khvh-4748/",
     [ValidateSet("edge", "chrome")]
     [string]$Browser = "edge",
@@ -101,26 +102,80 @@ $DeviceJson = $DeviceProbe | & $PythonExe -
 $DeviceInfo = $DeviceJson | ConvertFrom-Json
 $DefaultOutput = [int]$DeviceInfo.default_output
 $DefaultOutputDevice = $DeviceInfo.devices | Where-Object { $_.index -eq $DefaultOutput } | Select-Object -First 1
-$CaptureDevice = $DeviceInfo.devices | Where-Object { $_.index -eq $DeviceIndex } | Select-Object -First 1
+
+function Test-LoopbackOutputDevice {
+    param($Device)
+    if (-not $Device) {
+        return $false
+    }
+    return (
+        [int]$Device.max_input_channels -eq 0 -and
+        [int]$Device.max_output_channels -gt 0 -and
+        $Device.hostapi -match "WASAPI"
+    )
+}
+
+function Select-CoastCaptureDevice {
+    param(
+        $Devices,
+        [int]$RequestedIndex,
+        [int]$FallbackIndex
+    )
+
+    if ($RequestedIndex -ge 0) {
+        $RequestedDevice = $Devices | Where-Object { $_.index -eq $RequestedIndex } | Select-Object -First 1
+        if (-not $RequestedDevice) {
+            throw "Capture device index $RequestedIndex was not found."
+        }
+        if (-not (Test-LoopbackOutputDevice $RequestedDevice)) {
+            throw "Capture device $RequestedIndex is not a WASAPI output loopback candidate."
+        }
+        return $RequestedDevice
+    }
+
+    $PreferredDevice = $Devices |
+        Where-Object {
+            (Test-LoopbackOutputDevice $_) -and
+            ($_.name -match "Sceptre|NVIDIA")
+        } |
+        Select-Object -First 1
+
+    if ($PreferredDevice) {
+        return $PreferredDevice
+    }
+
+    $FallbackDevice = $Devices | Where-Object { $_.index -eq $FallbackIndex } | Select-Object -First 1
+    if ($FallbackDevice -and (Test-LoopbackOutputDevice $FallbackDevice)) {
+        return $FallbackDevice
+    }
+
+    $RealtekDevice = $Devices |
+        Where-Object {
+            (Test-LoopbackOutputDevice $_) -and
+            ($_.name -match "Realtek")
+        } |
+        Select-Object -First 1
+
+    if ($RealtekDevice) {
+        return $RealtekDevice
+    }
+
+    throw "No suitable WASAPI output loopback capture device was found."
+}
+
+$CaptureDevice = Select-CoastCaptureDevice -Devices $DeviceInfo.devices -RequestedIndex $DeviceIndex -FallbackIndex $FallbackDeviceIndex
+$DeviceIndex = [int]$CaptureDevice.index
 
 Write-Host "Coast night watch preflight"
 Write-Host "Default output: [$DefaultOutput] $($DefaultOutputDevice.name)"
-Write-Host "Capture device:  [$DeviceIndex] $($CaptureDevice.name)"
+Write-Host "Capture device:  [$DeviceIndex] $($CaptureDevice.name) ($($CaptureDevice.hostapi))"
 Write-Host "Browser:         $Browser"
-
-if (-not $CaptureDevice) {
-    throw "Capture device index $DeviceIndex was not found."
-}
-
-if ($CaptureDevice.name -notmatch "Sceptre|NVIDIA") {
-    throw "Capture device $DeviceIndex does not look like the Sceptre/NVIDIA monitor audio route."
-}
 
 if (-not $ConfirmBrowserRoutedToMonitor) {
     Write-Host ""
-    Write-Host "Safety stop: confirm the dedicated browser is routed to the Sceptre monitor output." -ForegroundColor Yellow
-    Write-Host "Leave your Windows default speakers alone." -ForegroundColor Yellow
-    Write-Host "In Windows Volume Mixer, route $Browser output to Sceptre F27 / NVIDIA High Definition Audio." -ForegroundColor Yellow
+    Write-Host "Safety stop: confirm the dedicated browser audio route before recording." -ForegroundColor Yellow
+    Write-Host "Selected capture device: [$DeviceIndex] $($CaptureDevice.name)" -ForegroundColor Yellow
+    Write-Host "Use the Sceptre/NVIDIA route when present; Realtek WASAPI loopback is the verified fallback." -ForegroundColor Yellow
     Write-Host "Then rerun with -ConfirmBrowserRoutedToMonitor." -ForegroundColor Yellow
     exit 2
 }

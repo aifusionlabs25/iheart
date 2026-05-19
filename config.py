@@ -3,6 +3,7 @@ Centralized configuration for iHeart Recorder.
 All global constants, paths, and environment variable lookups are managed here.
 """
 import os
+import shutil
 from pathlib import Path
 
 # Base directory of the project
@@ -33,10 +34,28 @@ ENABLE_WASAPI_LOOPBACK = True
 # Compression settings
 ENABLE_COMPRESSION = True  # Enable automatic MP3 compression after recording
 MP3_BITRATE = "192k"  # MP3 bitrate: "128k", "192k", "256k", "320k" (192k recommended for radio)
-DELETE_ORIGINAL_WAV = True  # Delete original WAV file after successful compression
-# FFmpeg path: auto-discover from local bundle or system PATH
+DELETE_ORIGINAL_WAV = False  # Keep WAV files so post-recording verification can inspect them
+# FFmpeg path: auto-discover from local bundle, system PATH, or common WinGet install
 _ffmpeg_local = BASE_DIR / "ffmpeg" / "bin" / "ffmpeg.exe"
-FFMPEG_PATH = str(_ffmpeg_local) if _ffmpeg_local.exists() else "ffmpeg"
+_ffmpeg_path = shutil.which("ffmpeg")
+_ffmpeg_winget_root = (
+    Path.home()
+    / "AppData"
+    / "Local"
+    / "Microsoft"
+    / "WinGet"
+    / "Packages"
+    / "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
+)
+_ffmpeg_winget_matches = sorted(_ffmpeg_winget_root.glob("ffmpeg-*/*/ffmpeg.exe"))
+if _ffmpeg_local.exists():
+    FFMPEG_PATH = str(_ffmpeg_local)
+elif _ffmpeg_path:
+    FFMPEG_PATH = _ffmpeg_path
+elif _ffmpeg_winget_matches:
+    FFMPEG_PATH = str(_ffmpeg_winget_matches[-1])
+else:
+    FFMPEG_PATH = "ffmpeg"
 
 # Google Drive settings
 ENABLE_GOOGLE_DRIVE_UPLOAD = False

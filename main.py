@@ -10,10 +10,16 @@ import numpy as np
 import pytz
 import traceback
 import sys # Added for CLI logging to stdout
+import warnings
 from functools import partial # Needed for scheduler job args
 import wave
 import subprocess
 from browser_automation import BrowserController # Added import
+
+warnings.filterwarnings(
+    "ignore",
+    message="data discontinuity in recording",
+)
 
 try:
     import pythoncom

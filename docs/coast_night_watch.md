@@ -7,11 +7,13 @@ The night-watch path is designed to record Coast to Coast through a dedicated br
 - Leave Windows default output on the normal speakers.
 - Use Microsoft Edge only for the iHeart/Coast stream.
 - Route Edge output to `Sceptre F27 (NVIDIA High Definition Audio)` in Windows Volume Mixer.
-- Capture the Sceptre WASAPI loopback device:
+- Prefer the Sceptre WASAPI loopback device when Windows exposes it:
 
 ```text
 Device 16: Sceptre F27 (NVIDIA High Definition Audio) [Loopback]
 ```
+
+- If the Sceptre/NVIDIA route is not exposed, the wrapper falls back to the verified Realtek WASAPI loopback route.
 
 ## First-Time Manual Setup
 
@@ -38,6 +40,8 @@ Once Edge is routed to the Sceptre output, confirm the route explicitly:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\coast_night_watch.ps1 -PreflightOnly -ConfirmBrowserRoutedToMonitor
 ```
 
+The preflight prints the capture device it selected. It prefers Sceptre/NVIDIA when available and otherwise uses the Realtek WASAPI fallback that was verified during the 2026-05-17 overnight recovery.
+
 ## Short Recording Test
 
 Run a 5-minute test:
@@ -61,6 +65,52 @@ Expected verification:
 - duration at least 90% of the requested duration
 - stereo or mono WAV with a valid sample rate
 - RMS above `100`
+
+## Compression
+
+Recordings are compressed to MP3 after the WAV is written. The app auto-discovers FFmpeg from a local bundle, system PATH, or the common WinGet FFmpeg install.
+
+The original WAV is kept after compression so the wrapper can still run post-recording verification. Delete WAV files only after the MP3 and verification result are confirmed.
+
+## Nightly Report
+
+The nightly report should include:
+
+- scheduled task start status
+- recording completion status
+- newest WAV path when present
+- newest MP3 path when present
+- WAV and MP3 file sizes
+- duration
+- RMS
+- transcript or recording warnings
+- compression success or failure
+- whether any iHeart popup or ad overlay blocked playback
+
+Compression failure should be reported clearly, but it should not hide the recording verification result.
+
+## Warning Noise
+
+Known harmless recording warnings may be filtered only when they are understood and documented.
+
+Keep real failures visible, including:
+
+- missing output file
+- very short recording
+- silent or near-silent RMS
+- failed FFmpeg compression
+- browser or playback launch failure
+- ad or popup overlay blocking audio
+
+## Retention Policy
+
+Default retention rule:
+
+- Keep WAV files until the matching MP3 and verification result are confirmed.
+- Keep MP3 files as the long-term listening copy.
+- Do not delete unverified recordings automatically.
+- Do not bulk-delete recordings without Rob approval.
+- Prefer a dry-run cleanup report before any deletion.
 
 ## Production Schedule
 
@@ -94,3 +144,4 @@ That launches the same Windows PowerShell wrapper, keeps Edge as the dedicated b
 - Do not use this for a full overnight run until a short recording test verifies audio is captured.
 - Do not change the Windows default speaker output for this workflow.
 - Do not schedule this until the Edge routing and file verification are proven.
+- If the Sceptre/NVIDIA route disappears, verify a short Realtek fallback recording before relying on the overnight run.
